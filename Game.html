@@ -1,0 +1,1015 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Geometry Bash</title>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: #050510;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            touch-action: none; /* Prevent browser zooming and scrolling on touch */
+        }
+        #gameCanvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+        #uiLayer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none; /* Let clicks pass through to canvas */
+        }
+        .bar-container {
+            position: absolute;
+            width: 80%;
+            left: 10%;
+            height: 20px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 10px;
+            overflow: hidden;
+            border: 2px solid rgba(255, 255, 255, 0.2);
+        }
+        #healthContainer { top: 20px; }
+        #xpContainer { bottom: 20px; height: 15px; }
+        
+        .bar {
+            height: 100%;
+            width: 100%;
+            transition: width 0.1s linear;
+        }
+        #healthBar { background: linear-gradient(90deg, #ff3366, #ff0044); }
+        #xpBar { background: linear-gradient(90deg, #00ffcc, #00aaff); width: 0%; }
+        
+        #levelText {
+            position: absolute;
+            bottom: 45px;
+            width: 100%;
+            text-align: center;
+            color: #fff;
+            font-size: 20px;
+            font-weight: bold;
+            text-shadow: 0 0 5px #00aaff;
+        }
+        #shieldIndicator {
+            position: absolute;
+            top: 50px;
+            width: 100%;
+            text-align: center;
+            color: #00ffff;
+            font-size: 18px;
+            font-weight: bold;
+            display: none;
+            text-shadow: 0 0 10px #00ffff;
+        }
+
+        /* Virtual Joystick Styles */
+        #joystickZone {
+            position: absolute;
+            bottom: 30px;
+            right: 30px;
+            width: 120px;
+            height: 120px;
+            pointer-events: none;
+        }
+        #joystickBase {
+            position: absolute;
+            width: 100px;
+            height: 100px;
+            top: 10px; 
+            left: 10px;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.05);
+            border: 2px solid rgba(255, 255, 255, 0.2);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        #joystickKnob {
+            position: absolute;
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background: rgba(0, 255, 204, 0.4);
+            box-shadow: 0 0 15px rgba(0, 255, 204, 0.5);
+            transition: transform 0.05s linear;
+        }
+        
+        #gameOverScreen {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.8);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            display: none;
+            pointer-events: auto;
+        }
+        #gameOverScreen h1 { font-size: 48px; margin-bottom: 10px; color: #ff3366; text-shadow: 0 0 20px #ff3366;}
+        button {
+            padding: 15px 40px;
+            font-size: 24px;
+            background: #00ffcc;
+            color: #000;
+            border: none;
+            border-radius: 30px;
+            cursor: pointer;
+            font-weight: bold;
+            margin-top: 30px;
+            transition: transform 0.2s, background 0.2s;
+        }
+        button:hover {
+            transform: scale(1.1);
+            background: #fff;
+        }
+    </style>
+</head>
+<body>
+
+    <canvas id="gameCanvas"></canvas>
+    
+    <div id="uiLayer">
+        <div id="healthContainer" class="bar-container">
+            <div id="healthBar" class="bar"></div>
+        </div>
+        <div id="shieldIndicator">SHIELD ACTIVE</div>
+        <div id="levelText">Level 1</div>
+        <div id="xpContainer" class="bar-container">
+            <div id="xpBar" class="bar"></div>
+        </div>
+        
+        <div id="joystickZone">
+            <div id="joystickBase">
+                <div id="joystickKnob" id="joyKnob"></div>
+            </div>
+        </div>
+    </div>
+
+    <div id="gameOverScreen">
+        <h1>GAME OVER</h1>
+        <h2 id="finalLevel">Level: 1</h2>
+        <button onclick="resetGame()">PLAY AGAIN</button>
+    </div>
+
+<script>
+/**
+ * Vector Math Utility
+ */
+class Vec2 {
+    constructor(x, y) { this.x = x; this.y = y; }
+    add(v) { return new Vec2(this.x + v.x, this.y + v.y); }
+    sub(v) { return new Vec2(this.x - v.x, this.y - v.y); }
+    mult(n) { return new Vec2(this.x * n, this.y * n); }
+    mag() { return Math.sqrt(this.x * this.x + this.y * this.y); }
+    normalize() {
+        let m = this.mag();
+        return m === 0 ? new Vec2(0, 0) : new Vec2(this.x / m, this.y / m);
+    }
+    copy() { return new Vec2(this.x, this.y); }
+}
+
+/**
+ * Game Configuration & State
+ */
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+let width, height, cx, cy;
+
+// UI Elements
+const healthBar = document.getElementById('healthBar');
+const xpBar = document.getElementById('xpBar');
+const levelText = document.getElementById('levelText');
+const shieldIndicator = document.getElementById('shieldIndicator');
+const gameOverScreen = document.getElementById('gameOverScreen');
+const finalLevelText = document.getElementById('finalLevel');
+const joyKnob = document.getElementById('joystickKnob');
+
+// Game State
+let isPlaying = true;
+let frameCount = 0;
+let lastTime = 0;
+
+// Input State
+let moveTouchId = null;
+let aimTouchId = null;
+let pointerPos = new Vec2(0, 0); // For movement
+let isPointerDown = false;
+let isAiming = false;
+let aimJoyVector = new Vec2(1, 0);
+let joyBaseX = 0, joyBaseY = 0;
+const joyMaxRadius = 50;
+
+// Zoom settings
+const baseZoom = 0.75;
+let currentZoom = baseZoom;
+let targetZoom = baseZoom;
+
+// Entities
+let player;
+let bullets = [];
+let enemies = [];
+let pickups = [];
+let particles = [];
+let explosions = [];
+let floatingTexts = [];
+
+// Input handling (Multi-touch aware)
+function processPointerDown(id, x, y, targetTagName) {
+    if (targetTagName === 'BUTTON') return;
+    
+    let distToJoy = new Vec2(x - joyBaseX, y - joyBaseY).mag();
+    
+    // Check if touch is near the virtual joystick
+    if (distToJoy < joyMaxRadius * 2.0) { 
+        aimTouchId = id;
+        isAiming = true;
+        updateAim(x, y);
+    } else {
+        // If not joystick, assign to movement
+        if (moveTouchId === null) {
+            moveTouchId = id;
+            isPointerDown = true;
+            pointerPos.x = x; pointerPos.y = y;
+        }
+    }
+}
+
+function processPointerMove(id, x, y) {
+    if (id === aimTouchId) {
+        updateAim(x, y);
+    } else if (id === moveTouchId) {
+        pointerPos.x = x; pointerPos.y = y;
+    }
+}
+
+function processPointerUp(id) {
+    if (id === aimTouchId) {
+        aimTouchId = null;
+        isAiming = false;
+        joyKnob.style.transform = `translate(0px, 0px)`;
+    } else if (id === moveTouchId) {
+        moveTouchId = null;
+        isPointerDown = false;
+    }
+}
+
+function updateAim(x, y) {
+    let rawVec = new Vec2(x - joyBaseX, y - joyBaseY);
+    let dist = rawVec.mag();
+    if (dist > 5) {
+        aimJoyVector = rawVec.normalize();
+    }
+    let visualDist = Math.min(dist, joyMaxRadius);
+    let knobVec = rawVec.normalize().mult(visualDist);
+    if (dist <= 0.001) knobVec = new Vec2(0,0);
+    joyKnob.style.transform = `translate(${knobVec.x}px, ${knobVec.y}px)`;
+}
+
+// Event Listeners for controls
+window.addEventListener('mousedown', e => { 
+    if(e.target === canvas) e.preventDefault(); 
+    processPointerDown('mouse', e.clientX, e.clientY, e.target.tagName); 
+}, {passive: false});
+window.addEventListener('mousemove', e => { processPointerMove('mouse', e.clientX, e.clientY); });
+window.addEventListener('mouseup', e => { processPointerUp('mouse'); });
+
+window.addEventListener('touchstart', e => {
+    if(e.target === canvas) e.preventDefault();
+    for(let t of e.changedTouches) processPointerDown(t.identifier, t.clientX, t.clientY, e.target.tagName);
+}, {passive: false});
+window.addEventListener('touchmove', e => {
+    if(e.target === canvas) e.preventDefault();
+    for(let t of e.changedTouches) processPointerMove(t.identifier, t.clientX, t.clientY);
+}, {passive: false});
+window.addEventListener('touchend', e => {
+    for(let t of e.changedTouches) processPointerUp(t.identifier);
+});
+window.addEventListener('touchcancel', e => {
+    for(let t of e.changedTouches) processPointerUp(t.identifier);
+});
+
+function resize() {
+    width = canvas.width = window.innerWidth;
+    height = canvas.height = window.innerHeight;
+    cx = width / 2;
+    cy = height / 2;
+    // Positioning the virtual joystick anchor based on CSS
+    joyBaseX = width - 90; // 30px right margin + 60px half-width
+    joyBaseY = height - 90; 
+}
+window.addEventListener('resize', resize);
+resize();
+
+/**
+ * Procedural Fractal Terrain
+ */
+function getTerrainModifier(wx, wy) {
+    let noise = Math.sin(wx * 0.008) + Math.cos(wy * 0.008);
+    noise += 0.5 * Math.sin(wx * 0.02 + wy * 0.015);
+    noise += 0.25 * Math.cos(wx * 0.04 - wy * 0.04);
+    
+    let val = (noise + 1.75) / 3.5;
+    let isSlowZone = val < 0.4;
+    return {
+        isSlowZone: isSlowZone,
+        speedMult: isSlowZone ? 0.5 : 1.0,
+        value: val
+    };
+}
+
+/**
+ * Classes
+ */
+class Player {
+    constructor() {
+        this.pos = new Vec2(0, 0);
+        this.vel = new Vec2(0, 0);
+        this.dir = new Vec2(1, 0);
+        
+        // Stats
+        this.level = 1;
+        this.xp = 0;
+        this.xpNeeded = 10;
+        this.maxHealth = 100;
+        this.health = 100;
+        
+        this.baseSpeed = 2.5; 
+        
+        // Primary Weapon Stats
+        this.damage = 10;
+        this.fireDelay = 15; 
+        this.shootTimer = 0;
+        
+        // Secondary Weapon Stats
+        this.secondaryDamage = 15;
+        this.secondaryFireDelay = 75; 
+        this.secondaryTimer = 0;
+
+        this.shieldTimer = 0;
+        this.iFrames = 0; // Invincibility frames
+        this.radius = 15;
+    }
+
+    update() {
+        if (this.shieldTimer > 0) {
+            this.shieldTimer--;
+            shieldIndicator.style.display = 'block';
+        } else {
+            shieldIndicator.style.display = 'none';
+        }
+
+        if (this.iFrames > 0) this.iFrames--;
+
+        // Secondary Weapon Logic (Always active)
+        this.secondaryTimer--;
+        if (this.secondaryTimer <= 0) {
+            this.shootSecondary();
+        }
+
+        // Movement & Primary Weapon
+        if (isPointerDown) {
+            let targetDir = new Vec2(pointerPos.x - cx, pointerPos.y - cy);
+            let dist = targetDir.mag();
+            let speedFactor = Math.min(dist / 150, 1.0);
+            
+            if (dist > 10) {
+                this.dir = targetDir.normalize();
+                
+                let terrain = getTerrainModifier(this.pos.x, this.pos.y);
+                let currentSpeed = this.baseSpeed * terrain.speedMult * speedFactor;
+                
+                this.vel = this.dir.mult(currentSpeed);
+                this.pos = this.pos.add(this.vel);
+                targetZoom = baseZoom - (speedFactor * 0.15);
+            } else {
+                this.vel = new Vec2(0, 0);
+                targetZoom = baseZoom;
+            }
+        } else {
+            this.vel = new Vec2(0, 0);
+            targetZoom = baseZoom;
+        }
+
+        // Shooting logic determines aiming direction independently of movement
+        let isMoving = isPointerDown && new Vec2(pointerPos.x - cx, pointerPos.y - cy).mag() > 10;
+        
+        // Decrement timer
+        this.shootTimer = Math.max(0, this.shootTimer - 1);
+
+        // We shoot if we are explicitly aiming with the right stick, OR if we are moving
+        if (isAiming || isMoving) {
+            if (this.shootTimer <= 0) {
+                this.shootPrimary();
+                this.shootTimer = this.fireDelay;
+            }
+        }
+
+        currentZoom += (targetZoom - currentZoom) * 0.05;
+
+        healthBar.style.width = Math.max(0, (this.health / this.maxHealth) * 100) + '%';
+        xpBar.style.width = (this.xp / this.xpNeeded) * 100 + '%';
+    }
+
+    shootPrimary() {
+        let shootDir = isAiming ? aimJoyVector : this.dir;
+        let bVel = shootDir.mult(10).add(this.vel.mult(0.5)); 
+        let bPos = this.pos.add(shootDir.mult(this.radius));
+        bullets.push(new Bullet(bPos, bVel, this.damage, '#00ffff', 4));
+    }
+
+    shootSecondary() {
+        if (enemies.length === 0) return;
+        
+        let nearest = null;
+        let minDist = Infinity;
+        
+        for (let e of enemies) {
+            let dist = this.pos.sub(e.pos).mag();
+            if (dist < minDist) {
+                minDist = dist;
+                nearest = e;
+            }
+        }
+        
+        if (nearest && minDist < 800) {
+            let aimDir = nearest.pos.sub(this.pos).normalize();
+            let bVel = aimDir.mult(12);
+            let bPos = this.pos.add(aimDir.mult(this.radius));
+            bullets.push(new Bullet(bPos, bVel, this.secondaryDamage, '#ff00ff', 6));
+            this.secondaryTimer = this.secondaryFireDelay;
+        }
+    }
+
+    takeDamage(amount) {
+        if (this.shieldTimer > 0 || this.iFrames > 0) return; 
+        
+        this.health -= amount;
+        this.iFrames = 30; // Half a second of invincibility
+        createParticles(this.pos, '#ff0044', 5, 2);
+        
+        if (this.health <= 0) {
+            die();
+        }
+    }
+
+    gainXp(amount) {
+        this.xp += amount;
+        if (this.xp >= this.xpNeeded) {
+            this.levelUp();
+        }
+    }
+
+    levelUp() {
+        this.level++;
+        this.xp -= this.xpNeeded;
+        this.xpNeeded = Math.floor(this.xpNeeded * 1.5);
+        this.health = this.maxHealth; 
+        
+        levelText.innerText = "Level " + this.level;
+        
+        const boosts = [
+            { name: "Max Health Up!", apply: () => { this.maxHealth += 20; this.health += 20; } },
+            { name: "Speed Up!", apply: () => { this.baseSpeed += 0.3; } },
+            { name: "Primary Fire Rate Up!", apply: () => { this.fireDelay = Math.max(4, this.fireDelay - 2); } },
+            { name: "Secondary Fire Rate Up!", apply: () => { this.secondaryFireDelay = Math.max(20, this.secondaryFireDelay - 10); } },
+            { name: "Damage Up!", apply: () => { this.damage += 5; this.secondaryDamage += 5; } },
+            { name: "Shield Granted!", apply: () => { this.shieldTimer = 420; } }
+        ];
+        
+        let choice = boosts[Math.floor(Math.random() * boosts.length)];
+        choice.apply();
+        
+        floatingTexts.push(new FloatingText("LEVEL UP!", this.pos.x, this.pos.y - 30, '#00ffcc', 24));
+        setTimeout(() => {
+            floatingTexts.push(new FloatingText(choice.name, this.pos.x, this.pos.y - 30, '#ffff00', 18));
+        }, 500);
+        
+        createParticles(this.pos, '#00ffcc', 30, 5);
+    }
+
+    draw(ctx) {
+        ctx.save();
+        ctx.translate(this.pos.x, this.pos.y);
+        
+        // Rotate character based on aiming or movement direction
+        let drawDir = isAiming ? aimJoyVector : this.dir;
+        ctx.rotate(Math.atan2(drawDir.y, drawDir.x));
+        
+        // i-Frame blinking
+        if (this.iFrames > 0) {
+            ctx.globalAlpha = 0.3 + Math.abs(Math.sin(frameCount * 0.3)) * 0.7;
+        }
+
+        if (this.shieldTimer > 0) {
+            ctx.beginPath();
+            ctx.arc(0, 0, this.radius + 10 + Math.sin(frameCount * 0.2) * 2, 0, Math.PI * 2);
+            ctx.strokeStyle = `rgba(0, 255, 255, ${0.5 + Math.sin(frameCount * 0.1) * 0.3})`;
+            ctx.lineWidth = 3;
+            ctx.stroke();
+        }
+
+        ctx.beginPath();
+        ctx.moveTo(this.radius, 0);
+        ctx.lineTo(-this.radius, this.radius * 0.8);
+        ctx.lineTo(-this.radius * 0.5, 0);
+        ctx.lineTo(-this.radius, -this.radius * 0.8);
+        ctx.closePath();
+        
+        ctx.fillStyle = '#00ffff';
+        ctx.fill();
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        
+        if (isPointerDown) {
+            ctx.beginPath();
+            ctx.moveTo(-this.radius * 0.5, 0);
+            ctx.lineTo(-this.radius * 1.5 - Math.random() * 5, 0);
+            ctx.strokeStyle = '#ff00aa';
+            ctx.lineWidth = 4;
+            ctx.stroke();
+        }
+        
+        ctx.beginPath();
+        ctx.arc(0, 0, 4, 0, Math.PI*2);
+        ctx.fillStyle = '#ff00ff';
+        ctx.fill();
+
+        ctx.restore();
+    }
+}
+
+class Bullet {
+    constructor(pos, vel, damage, color, radius) {
+        this.pos = pos.copy();
+        this.vel = vel;
+        this.damage = damage;
+        this.color = color;
+        this.radius = radius;
+        this.life = 120;
+    }
+    update() {
+        this.pos = this.pos.add(this.vel);
+        this.life--;
+    }
+    draw(ctx) {
+        ctx.beginPath();
+        ctx.arc(this.pos.x, this.pos.y, this.radius, 0, Math.PI*2);
+        ctx.fillStyle = '#fff';
+        ctx.fill();
+        ctx.shadowBlur = 10;
+        ctx.shadowColor = this.color;
+        ctx.arc(this.pos.x, this.pos.y, this.radius, 0, Math.PI*2);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+    }
+}
+
+class Enemy {
+    constructor(x, y, level) {
+        this.pos = new Vec2(x, y);
+        this.vel = new Vec2(0, 0);
+        
+        this.health = 20 + level * 5;
+        this.baseSpeed = 1.0 + Math.random() * (0.5 + level * 0.05);
+        this.radius = 12 + Math.random() * 5;
+        
+        // Reduced collision damage
+        this.damage = 3 + Math.floor(level * 0.5);
+        this.xpValue = 2 + Math.floor(level * 0.5);
+        
+        this.color = `hsl(${340 + Math.random()*40}, 100%, 60%)`;
+        this.vertices = 4 + Math.floor(Math.random() * 3);
+        this.angle = 0;
+        this.rotationSpeed = (Math.random() - 0.5) * 0.1;
+    }
+
+    update(others) {
+        let toPlayer = player.pos.sub(this.pos);
+        let distToPlayer = toPlayer.mag();
+        let desiredVel = toPlayer.normalize().mult(this.baseSpeed);
+        
+        let separation = new Vec2(0, 0);
+        let neighborCount = 0;
+        for(let other of others) {
+            if (other === this) continue;
+            let d = this.pos.sub(other.pos);
+            let dist = d.mag();
+            if (dist < this.radius * 3) {
+                separation = separation.add(d.normalize().mult(10 / (dist + 0.1)));
+                neighborCount++;
+            }
+        }
+        if (neighborCount > 0) {
+            desiredVel = desiredVel.add(separation.mult(0.5));
+        }
+        
+        let terrain = getTerrainModifier(this.pos.x, this.pos.y);
+        desiredVel = desiredVel.normalize().mult(this.baseSpeed * terrain.speedMult);
+
+        this.vel = this.vel.mult(0.9).add(desiredVel.mult(0.1));
+        this.pos = this.pos.add(this.vel);
+        this.angle += this.rotationSpeed;
+
+        if (distToPlayer < this.radius + player.radius) {
+            player.takeDamage(this.damage);
+            this.pos = this.pos.sub(this.vel.mult(5));
+        }
+    }
+
+    takeDamage(amt) {
+        this.health -= amt;
+        this.radius *= 0.95; 
+        createParticles(this.pos, '#ffffff', 2, 1);
+        if (this.health <= 0) {
+            createParticles(this.pos, this.color, 10, 3);
+            pickups.push(new Pickup(this.pos.x, this.pos.y, this.xpValue));
+            return true; 
+        }
+        return false; 
+    }
+
+    draw(ctx) {
+        ctx.save();
+        ctx.translate(this.pos.x, this.pos.y);
+        ctx.rotate(this.angle);
+        
+        ctx.beginPath();
+        for (let i = 0; i < this.vertices; i++) {
+            let a = (i / this.vertices) * Math.PI * 2;
+            let px = Math.cos(a) * this.radius;
+            let py = Math.sin(a) * this.radius;
+            if (i === 0) ctx.moveTo(px, py);
+            else ctx.lineTo(px, py);
+        }
+        ctx.closePath();
+        
+        ctx.fillStyle = 'rgba(0,0,0,0.5)';
+        ctx.fill();
+        ctx.strokeStyle = this.color;
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        
+        ctx.restore();
+    }
+}
+
+class Explosion {
+    constructor(pos, maxRadius, damage, color) {
+        this.pos = pos.copy();
+        this.maxRadius = maxRadius;
+        this.damage = damage;
+        this.color = color;
+        this.radius = 0;
+        this.life = 1.0;
+        this.hitEnemies = new Set();
+    }
+    
+    update() {
+        // Expand rapidly
+        this.radius += (this.maxRadius - this.radius) * 0.2 + 2;
+        this.life -= 0.05;
+
+        // Apply Splash Damage
+        for (let i = enemies.length - 1; i >= 0; i--) {
+            let e = enemies[i];
+            if (!this.hitEnemies.has(e)) {
+                if (this.pos.sub(e.pos).mag() < this.radius + e.radius) {
+                    this.hitEnemies.add(e);
+                    
+                    if (e.takeDamage(this.damage)) {
+                        enemies.splice(i, 1);
+                        floatingTexts.push(new FloatingText(this.damage.toString(), e.pos.x, e.pos.y, this.color, 14));
+                        
+                        // CHAIN REACTION
+                        let chainRadius = this.maxRadius * 0.8;
+                        let chainDamage = this.damage * 0.8;
+                        explosions.push(new Explosion(e.pos.copy(), chainRadius, chainDamage, e.color));
+                    }
+                }
+            }
+        }
+    }
+    
+    draw(ctx) {
+        ctx.save();
+        ctx.globalAlpha = Math.max(0, this.life * 0.8);
+        ctx.beginPath();
+        ctx.arc(this.pos.x, this.pos.y, this.radius, 0, Math.PI*2);
+        ctx.fillStyle = this.color;
+        ctx.fill();
+        
+        ctx.globalAlpha = Math.max(0, this.life);
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = '#fff';
+        ctx.stroke();
+        ctx.restore();
+    }
+}
+
+class Pickup {
+    constructor(x, y, val) {
+        this.pos = new Vec2(x, y);
+        this.val = val;
+        this.radius = 6;
+        this.suckRadius = 150;
+        this.collectRadius = 20;
+        this.vel = new Vec2(0, 0);
+        this.angle = Math.random() * Math.PI;
+    }
+    update() {
+        let toPlayer = player.pos.sub(this.pos);
+        let dist = toPlayer.mag();
+        
+        if (dist < this.collectRadius) {
+            player.gainXp(this.val);
+            return true;
+        } else if (dist < this.suckRadius) {
+            let pull = toPlayer.normalize().mult(150 / dist); 
+            this.vel = this.vel.add(pull);
+            this.vel = this.vel.mult(0.85);
+            this.pos = this.pos.add(this.vel);
+        } else {
+            this.vel = this.vel.mult(0.8);
+            this.pos = this.pos.add(this.vel);
+        }
+        this.angle += 0.05;
+        return false;
+    }
+    draw(ctx) {
+        ctx.save();
+        ctx.translate(this.pos.x, this.pos.y);
+        ctx.rotate(this.angle);
+        
+        ctx.beginPath();
+        ctx.moveTo(0, -this.radius);
+        ctx.lineTo(this.radius, 0);
+        ctx.lineTo(0, this.radius);
+        ctx.lineTo(-this.radius, 0);
+        ctx.closePath();
+        
+        ctx.fillStyle = '#ffff00';
+        ctx.fill();
+        ctx.shadowBlur = 10;
+        ctx.shadowColor = '#ffff00';
+        ctx.fill();
+        
+        ctx.restore();
+    }
+}
+
+class Particle {
+    constructor(pos, color, speed) {
+        this.pos = pos.copy();
+        let a = Math.random() * Math.PI * 2;
+        let s = Math.random() * speed;
+        this.vel = new Vec2(Math.cos(a)*s, Math.sin(a)*s);
+        this.color = color;
+        this.life = 1.0;
+        this.decay = 0.02 + Math.random() * 0.03;
+        this.radius = 1 + Math.random() * 3;
+    }
+    update() {
+        this.pos = this.pos.add(this.vel);
+        this.vel = this.vel.mult(0.9);
+        this.life -= this.decay;
+    }
+    draw(ctx) {
+        ctx.globalAlpha = Math.max(0, this.life);
+        ctx.beginPath();
+        ctx.arc(this.pos.x, this.pos.y, this.radius, 0, Math.PI*2);
+        ctx.fillStyle = this.color;
+        ctx.fill();
+        ctx.globalAlpha = 1.0;
+    }
+}
+
+class FloatingText {
+    constructor(text, x, y, color, size) {
+        this.text = text;
+        this.pos = new Vec2(x, y);
+        this.color = color;
+        this.size = size;
+        this.life = 1.0;
+    }
+    update() {
+        this.pos.y -= 1;
+        this.life -= 0.015;
+    }
+    draw(ctx) {
+        ctx.globalAlpha = Math.max(0, this.life);
+        ctx.fillStyle = this.color;
+        ctx.font = `bold ${this.size}px Arial`;
+        ctx.textAlign = 'center';
+        ctx.fillText(this.text, this.pos.x, this.pos.y);
+        ctx.globalAlpha = 1.0;
+    }
+}
+
+function createParticles(pos, color, count, speed) {
+    for(let i=0; i<count; i++) {
+        particles.push(new Particle(pos, color, speed));
+    }
+}
+
+/**
+ * Game Core Functions
+ */
+function spawnEnemy() {
+    let spawnChance = 0.02 + (player.level * 0.005); 
+    
+    if (Math.random() < spawnChance) {
+        let angle = Math.random() * Math.PI * 2;
+        let dist = (Math.max(width, height) / 2) / currentZoom + 100;
+        let ex = player.pos.x + Math.cos(angle) * dist;
+        let ey = player.pos.y + Math.sin(angle) * dist;
+        
+        enemies.push(new Enemy(ex, ey, player.level));
+    }
+}
+
+function drawTerrain(ctx, camX, camY) {
+    const tileSize = 80;
+    
+    let viewWidth = width / currentZoom;
+    let viewHeight = height / currentZoom;
+    
+    let startX = Math.floor((camX - viewWidth / 2) / tileSize) * tileSize;
+    let startY = Math.floor((camY - viewHeight / 2) / tileSize) * tileSize;
+    let endX = startX + viewWidth + tileSize;
+    let endY = startY + viewHeight + tileSize;
+
+    ctx.fillStyle = '#050510';
+    ctx.fillRect(startX, startY, viewWidth + tileSize*2, viewHeight + tileSize*2);
+
+    for (let y = startY; y < endY; y += tileSize) {
+        for (let x = startX; x < endX; x += tileSize) {
+            let t = getTerrainModifier(x + tileSize/2, y + tileSize/2);
+            
+            if (t.isSlowZone) {
+                ctx.fillStyle = `rgba(50, 20, 80, ${0.4 + t.value})`;
+            } else {
+                ctx.fillStyle = `rgba(20, 20, 40, ${t.value * 0.4})`;
+            }
+            
+            ctx.fillRect(x, y, tileSize, tileSize);
+            
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.02)';
+            ctx.lineWidth = 1;
+            ctx.strokeRect(x, y, tileSize, tileSize);
+        }
+    }
+}
+
+function update(dt) {
+    if (!isPlaying) return;
+    frameCount++;
+
+    player.update();
+    spawnEnemy();
+
+    // Update Bullets
+    for (let i = bullets.length - 1; i >= 0; i--) {
+        let b = bullets[i];
+        b.update();
+        if (b.life <= 0) {
+            bullets.splice(i, 1);
+            continue;
+        }
+
+        let hit = false;
+        for (let j = enemies.length - 1; j >= 0; j--) {
+            let e = enemies[j];
+            let dist = b.pos.sub(e.pos).mag();
+            if (dist < b.radius + e.radius) {
+                hit = true;
+                if (e.takeDamage(b.damage)) {
+                    enemies.splice(j, 1);
+                    floatingTexts.push(new FloatingText(b.damage.toString(), e.pos.x, e.pos.y, b.color, 14));
+                    
+                    // INITIAL DEATH EXPLOSION
+                    explosions.push(new Explosion(e.pos.copy(), 60 + player.level * 4, 15 + player.level * 2, e.color));
+                }
+                break;
+            }
+        }
+        if (hit) bullets.splice(i, 1);
+    }
+
+    // Update Explosions
+    for (let i = explosions.length - 1; i >= 0; i--) {
+        explosions[i].update();
+        if (explosions[i].life <= 0) explosions.splice(i, 1);
+    }
+
+    // Update Enemies
+    for (let i = enemies.length - 1; i >= 0; i--) {
+        enemies[i].update(enemies);
+        if (enemies[i].pos.sub(player.pos).mag() > 3000) {
+            enemies.splice(i, 1); 
+        }
+    }
+
+    // Update Pickups
+    for (let i = pickups.length - 1; i >= 0; i--) {
+        if (pickups[i].update()) pickups.splice(i, 1);
+    }
+
+    // Update Visual Effects
+    for (let i = particles.length - 1; i >= 0; i--) {
+        particles[i].update();
+        if (particles[i].life <= 0) particles.splice(i, 1);
+    }
+    
+    for (let i = floatingTexts.length - 1; i >= 0; i--) {
+        floatingTexts[i].update();
+        if (floatingTexts[i].life <= 0) floatingTexts.splice(i, 1);
+    }
+}
+
+function draw() {
+    ctx.clearRect(0, 0, width, height);
+    if (!isPlaying) return;
+
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.scale(currentZoom, currentZoom);
+    
+    let camX = player.pos.x;
+    let camY = player.pos.y;
+    ctx.translate(-camX, -camY);
+
+    drawTerrain(ctx, camX, camY);
+
+    pickups.forEach(p => p.draw(ctx));
+    enemies.forEach(e => e.draw(ctx));
+    explosions.forEach(ex => ex.draw(ctx));
+    particles.forEach(p => p.draw(ctx));
+    bullets.forEach(b => b.draw(ctx));
+    player.draw(ctx);
+    floatingTexts.forEach(f => f.draw(ctx));
+
+    ctx.restore();
+}
+
+function loop(timestamp) {
+    let dt = timestamp - lastTime;
+    lastTime = timestamp;
+    
+    update(dt);
+    draw();
+    
+    requestAnimationFrame(loop);
+}
+
+function die() {
+    isPlaying = false;
+    finalLevelText.innerText = "Level Reached: " + player.level;
+    gameOverScreen.style.display = 'flex';
+}
+
+function resetGame() {
+    player = new Player();
+    bullets = [];
+    enemies = [];
+    pickups = [];
+    particles = [];
+    explosions = [];
+    floatingTexts = [];
+    frameCount = 0;
+    currentZoom = baseZoom;
+    targetZoom = baseZoom;
+    
+    healthBar.style.width = '100%';
+    xpBar.style.width = '0%';
+    levelText.innerText = "Level 1";
+    shieldIndicator.style.display = 'none';
+    gameOverScreen.style.display = 'none';
+    
+    isPlaying = true;
+    isPointerDown = false;
+    moveTouchId = null;
+    aimTouchId = null;
+    isAiming = false;
+    joyKnob.style.transform = `translate(0px, 0px)`;
+}
+
+// Start Game
+resetGame();
+requestAnimationFrame(loop);
+
+</script>
+</body>
+</html>
+
+
